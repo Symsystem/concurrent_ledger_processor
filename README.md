@@ -1,6 +1,6 @@
 # Concurrent Ledger Processor
 
-**Time:** ~30 minutes &nbsp;•&nbsp; **Language:** Python / Rust / Java / Node.js — pick one
+**Time:** ~30 minutes &nbsp;•&nbsp; **Language:** Python / Java / Node.js — pick one
 
 Starter files are provided for each language. The scaffolding (the 4-worker
 fan-out and the test harness) is identical across all four; only the
@@ -11,7 +11,6 @@ fan-out and the test harness) is identical across all four; only the
 ├── PROBLEM.md
 ├── ledger_test_data.json
 ├── python/   starter.py            (run: python3 starter.py)
-├── rust/     src/starter.rs        (run: cargo run --release --bin starter)
 ├── java/     src/main/java/Starter.java
 │                                   (run: mvn -q compile exec:java -Dexec.mainClass=Starter)
 └── node/     starter.js            (run: node starter.js, requires Node 18+)
