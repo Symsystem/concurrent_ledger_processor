@@ -1,12 +1,13 @@
-// Candidate starter. Read PROBLEM.md first.
+// Candidate starter. Read README.md first.
 //
-// The scaffolding below launches 4 concurrent worker coroutines; each one
-// replays the FULL transaction stream into your `LedgerService.handle`.
-// Your job is to make `handle` race-safe and idempotent and to return the
-// final result from `snapshot`. Do not modify the worker loop or the harness.
+// The scaffolding below puts every transaction onto a shared queue, then
+// launches 4 worker coroutines that shift from it concurrently. Each queue
+// entry is delivered to exactly one worker, but the input stream itself
+// contains duplicates (upstream is at-least-once), so `handle` must still
+// be idempotent.
 //
 // Run with:  node starter.js   (Node 18+; ESM)
-// Goal:      `ok: true`, well under 1 second wall-clock.
+// Goal:      `ok: true`, well under 400 ms wall-clock.
 //
 // Hint to keep in mind: Node runs on a single-threaded event loop. Async
 // tasks can only interleave at `await` points — code between two awaits
@@ -15,7 +16,7 @@
 import fs from 'node:fs';
 
 const WORKER_COUNT = 4;
-const IO_DELAY_MS = 20;
+const IO_DELAY_MS = 30;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -28,10 +29,10 @@ class LedgerService {
   }
 
   /**
-   * Called concurrently by every worker, for every transaction.
-   * Each tx will arrive here up to WORKER_COUNT times (plus stream
-   * duplicates). Apply each transaction at most once. Don't corrupt
-   * shared state.
+   * Called from multiple worker coroutines, one transaction at a time.
+   * The queue delivers each entry to exactly one worker, but the stream
+   * contains duplicates. Apply each transaction at most once. Don't
+   * corrupt shared state.
    */
   async handle(tx) {
     await sleep(IO_DELAY_MS); // simulated upstream lookup
@@ -49,17 +50,22 @@ class LedgerService {
 }
 
 // === Worker scaffolding — DO NOT MODIFY ======================================
+// Transactions live on a shared queue. Workers race to pull from it. In
+// Node's single-threaded event loop, `queue.shift()` is atomic between
+// awaits, so each entry is handed to exactly one worker.
 
-async function worker(id, service, transactions) {
-  for (const tx of transactions) {
+async function worker(id, service, queue) {
+  while (queue.length > 0) {
+    const tx = queue.shift();
+    if (tx === undefined) return;
     await service.handle(tx);
   }
 }
 
 async function run(data) {
   const service = new LedgerService(data.initial_balances);
-  const txs = data.transactions;
-  const workers = Array.from({ length: WORKER_COUNT }, (_, i) => worker(i, service, txs));
+  const queue = [...data.transactions];
+  const workers = Array.from({ length: WORKER_COUNT }, (_, i) => worker(i, service, queue));
   await Promise.all(workers);
   return service.snapshot();
 }

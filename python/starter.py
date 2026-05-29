@@ -1,23 +1,26 @@
-"""
-Candidate starter. Read PROBLEM.md first.
+"""Candidate starter. Read README.md first.
 
-The scaffolding below already launches 4 concurrent workers, each of which
-replays the FULL transaction stream into your `LedgerService.handle` method.
+Four OS threads consume transactions from a shared queue and call
+`LedgerService.handle` on each one. Concurrency is preemptive — the GIL
+gives you bytecode atomicity but not statement atomicity, so you'll need
+real locks around read-modify-write critical sections.
+
 Your job is to make `handle` race-safe and idempotent and to surface the
 final result via `snapshot`. Do not modify the worker loop or `run`.
 
 Run with:  python3 starter.py
-Goal:      `ok: True`, well under 1 second wall-clock.
+Goal:      `ok: True`, well under 400 ms wall-clock.
 """
 
-import asyncio
 import json
 import os
+import queue
 import sys
+import threading
 import time
 
 WORKER_COUNT = 4
-IO_DELAY_S = 0.02
+IO_DELAY_S = 0.030
 DEFAULT_DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "ledger_test_data.json")
 
 
@@ -28,16 +31,17 @@ class LedgerService:
         self.balances: dict = dict(initial_balances)
         # TODO: add the synchronization primitives + bookkeeping state you need.
 
-    async def handle(self, tx: dict) -> None:
-        """Called concurrently by every worker, for every transaction.
+    def handle(self, tx: dict) -> None:
+        """Called from multiple worker threads, one transaction at a time.
 
-        Each transaction will arrive here up to WORKER_COUNT times (once per
-        worker), on top of any duplicates already present in the input stream.
-        Apply each transaction at most once. Don't corrupt shared state.
+        The shared queue guarantees each entry is delivered to exactly one
+        worker, but the input stream itself contains duplicates (upstream is
+        at-least-once). Apply each transaction at most once. Don't corrupt
+        shared state.
 
-        Validation rules and rejection semantics: see PROBLEM.md.
+        Validation rules and rejection semantics: see README.md.
         """
-        await asyncio.sleep(IO_DELAY_S)  # simulated upstream lookup
+        time.sleep(IO_DELAY_S)  # simulated upstream lookup
         # TODO: implement.
 
     def snapshot(self) -> dict:
@@ -51,19 +55,37 @@ class LedgerService:
 
 
 # === Worker scaffolding — DO NOT MODIFY =======================================
-# Four workers run concurrently. Each one walks the whole transaction stream
-# and dispatches every transaction into the service. Concurrent calls into
-# `handle` are the whole point of the exercise.
+# Transactions sit on a shared queue. WORKER_COUNT threads pull from it and
+# dispatch into `service.handle`. Each queue entry goes to exactly one worker,
+# but the stream contains duplicates, so `handle` must still be idempotent.
 
-async def worker(worker_id: int, service: LedgerService, transactions: list) -> None:
-    for tx in transactions:
-        await service.handle(tx)
+_SENTINEL: object = object()
 
 
-async def run(data: dict) -> dict:
+def worker(worker_id: int, service: LedgerService, q: "queue.Queue") -> None:
+    while True:
+        tx = q.get()
+        if tx is _SENTINEL:
+            return
+        service.handle(tx)
+
+
+def run(data: dict) -> dict:
     service = LedgerService(data["initial_balances"])
-    txs = data["transactions"]
-    await asyncio.gather(*(worker(i, service, txs) for i in range(WORKER_COUNT)))
+    q: "queue.Queue" = queue.Queue()
+    for tx in data["transactions"]:
+        q.put(tx)
+    for _ in range(WORKER_COUNT):
+        q.put(_SENTINEL)
+
+    threads = [
+        threading.Thread(target=worker, args=(i, service, q), daemon=True)
+        for i in range(WORKER_COUNT)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
     return service.snapshot()
 
 
@@ -74,7 +96,7 @@ if __name__ == "__main__":
     with open(path) as f:
         data = json.load(f)
     start = time.perf_counter()
-    result = asyncio.run(run(data))
+    result = run(data)
     elapsed = time.perf_counter() - start
     expected = data["expected"]
     ok = result == expected

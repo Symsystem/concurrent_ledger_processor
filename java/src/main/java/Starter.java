@@ -1,12 +1,13 @@
-// Candidate starter. Read PROBLEM.md first.
+// Candidate starter. Read README.md first.
 //
-// The scaffolding below already launches 4 concurrent virtual threads; each
-// one replays the FULL transaction stream into your `LedgerService.handle`.
-// Your job is to make `handle` race-safe and idempotent and to return the
-// final result from `snapshot`. Do not modify the worker loop or `main`.
+// The scaffolding below puts every transaction onto a shared queue, then
+// launches 4 worker virtual threads that pull from it concurrently. Each
+// queue entry is delivered to exactly one worker, but the input stream
+// itself contains duplicates (upstream is at-least-once), so `handle`
+// must still be idempotent.
 //
 // Run with:  mvn -q compile exec:java -Dexec.mainClass=Starter
-// Goal:      `ok: true`, well under 1 second wall-clock.
+// Goal:      `ok: true`, well under 400 ms wall-clock.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -15,12 +16,13 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 public class Starter {
     public static final int WORKER_COUNT = 4;
-    public static final long IO_DELAY_MS = 20;
+    public static final long IO_DELAY_MS = 30;
 
     // === The thing you need to design ========================================
 
@@ -33,10 +35,10 @@ public class Starter {
         }
 
         /**
-         * Called concurrently by every worker, for every transaction.
-         * Each tx will arrive here up to WORKER_COUNT times (plus stream
-         * duplicates). Apply each transaction at most once. Don't corrupt
-         * shared state.
+         * Called from multiple worker threads, one transaction at a time.
+         * The queue delivers each entry to exactly one worker, but the
+         * stream contains duplicates. Apply each transaction at most once.
+         * Don't corrupt shared state.
          */
         public void handle(Models.Transaction tx) throws InterruptedException {
             Thread.sleep(IO_DELAY_MS); // simulated upstream lookup
@@ -51,8 +53,9 @@ public class Starter {
 
     // === Worker scaffolding — DO NOT MODIFY ==================================
 
-    private static void worker(int id, LedgerService service, List<Models.Transaction> txs) {
-        for (var tx : txs) {
+    private static void worker(int id, LedgerService service, ConcurrentLinkedQueue<Models.Transaction> queue) {
+        Models.Transaction tx;
+        while ((tx = queue.poll()) != null) {
             try {
                 service.handle(tx);
             } catch (InterruptedException e) {
@@ -68,14 +71,14 @@ public class Starter {
         Models.InputData data = mapper.readValue(new File(path), Models.InputData.class);
 
         var service = new LedgerService(data.initialBalances());
-        List<Models.Transaction> txs = data.transactions();
+        var queue = new ConcurrentLinkedQueue<>(data.transactions());
 
         long start = System.nanoTime();
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<?>> futures = new ArrayList<>();
             for (int i = 0; i < WORKER_COUNT; i++) {
                 final int id = i;
-                futures.add(executor.submit(() -> { worker(id, service, txs); return null; }));
+                futures.add(executor.submit(() -> { worker(id, service, queue); return null; }));
             }
             for (var f : futures) f.get();
         }

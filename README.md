@@ -2,13 +2,13 @@
 
 **Time:** ~30 minutes &nbsp;•&nbsp; **Language:** Python / Java / Node.js — pick one
 
-Starter files are provided for each language. The scaffolding (the 4-worker
-fan-out and the test harness) is identical across all four; only the
+Starter files are provided for each language. The scaffolding (the work
+queue and the test harness) is identical across all three; only the
 `LedgerService` class is yours to fill in.
 
 ```
 .
-├── PROBLEM.md
+├── README.md
 ├── ledger_test_data.json
 ├── python/   starter.py            (run: python3 starter.py)
 ├── java/     src/main/java/Starter.java
@@ -18,15 +18,17 @@ fan-out and the test harness) is identical across all four; only the
 
 ## Context
 
-You're building the consumer for a payment-platform event stream. Upstream
-producers fan the same stream out to **4 worker processes** on your side —
-each worker independently replays **every transaction** to your ledger
-service. The shape is realistic: at-least-once delivery, multiple consumers
-on the same stream, no coordination upstream.
+You're building the consumer for a payment-platform event stream. Your
+service pulls transactions off a shared work queue using **4 concurrent
+workers** (OS threads in Python and Java; async coroutines in Node). Each
+queue entry is consumed by exactly one worker — but the upstream stream
+is at-least-once, so the queue itself contains duplicates: the same
+`tx_id` can appear in more than one entry.
 
-The starter already wires the 4 workers. Each one walks the full transaction
-list in order and calls `service.handle(tx)` on every transaction. The
-worker loop and the harness are out of scope — don't change them.
+The starter already wires up the queue and the 4 workers. Each worker
+loops pulling from the queue and calls `service.handle(tx)` on whatever
+it gets. The worker loop and the harness are out of scope — don't change
+them.
 
 ## Your task
 
@@ -35,8 +37,8 @@ program's output equals `data["expected"]` for the provided fixture.
 
 ### Requirements
 
-1. **Each transaction is applied at most once**, no matter how many times it
-   is delivered.
+1. **Each transaction is applied at most once**, no matter how many times
+   it is delivered.
 
 2. **Transfers are atomic** — both balances update, or neither does.
 
@@ -51,11 +53,12 @@ program's output equals `data["expected"]` for the provided fixture.
    Each rejected `tx_id` appears once in `rejected_tx_ids`, even if
    delivered many times.
 
-5. **`applied_tx_ids` and `rejected_tx_ids` are returned in ascending `seq`
-   order.**
+5. **`applied_tx_ids` and `rejected_tx_ids` are returned in ascending
+   `seq` order.**
 
-6. **Performance.** The simulated upstream lookup inside `handle` is 20 ms.
-   A correct implementation should finish well under 1 second of wall-clock.
+6. **Performance.** The simulated upstream lookup inside `handle` is
+   30 ms. A correct, properly concurrent implementation finishes well
+   under 400 ms wall-clock. There are 38 transactions in total.
 
 ### Transaction shape
 
